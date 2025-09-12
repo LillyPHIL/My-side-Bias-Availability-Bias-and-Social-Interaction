@@ -1,0 +1,2099 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.0" snapToGrid="false">
+  <code><![CDATA[extensions [nw]
+breed [ arguers arguer ] ;we call the agents in our model arguers
+breed [outset-beliefes outset-beliefe]
+outset-beliefes-own [belief]  ; these will become arguers' priors; to avioid confusion; priors NOT YET assigned to an arguer are called "belief"
+
+arguers-own [
+  prior ;this is an agent's prior degree of belief in the correct alternative of the binary issue
+  degree-of-belief ;this is an agent's degree of belief in the correct alternative after updates
+  degree-of-social-belief; this is the belief agents' arguments refect if social conformity ourside bias is persent
+  self-gamma ;this is an agent's radicality parameter gamma
+  p-color; color of the pen representing an arguer's belief
+  homophilie; When generating the HPAM this parameter expresses agents' dicprepancy in beliefs
+]
+
+globals [
+arg-list ;this is the list of the arguments that agents exchange, ordered accoridng to the order the arguments are presented
+prior-list ;this is the list of the agents' priors
+degree-belief-list ; this is the list of the agents' degrees of belief after update
+influence-list ; this is a list sorting arguers by their number of agents
+;this is for majority vote analysis. Hence redundant for our study;
+non-maj ;list used to calculate the probability of a majority of agents casting a correct vote
+communication-partners ;this variable identifies agents who recieve speakers' arguments
+
+
+alpha-correct
+alpha-incorrect
+beta-correct
+beta-incorrect
+
+
+;these three variables check that we do not get undesirable approximation error or majoriry voting
+wrong-prior
+wrong-degrees
+wrong-arg
+
+;##########################################################
+;#####Output that we ananlyse##############################
+;##########################################################
+
+ correct-at-start ;this variable tells the number of agents that have a prior belief strictly bigger than 0.5 in the correct alternative (prior > 0.5) before communication.
+ correct-at-end ;this variable tells the number of agents that have a strictly bigger than 0.5 in the correct alternative (prior > 0.5) after communication.
+
+ var-at-start ;this variable tells varianz of agents priors before communicaiton.
+ var-at-end ;this variable tells varianz of agents belies after communicaiton.
+
+ mean-at-start ;this variable tells mean of agents priors after communicaiton.
+ mean-at-end ;this variable tells mean of agents priors after communicaiton.
+
+ consensus-at-end ;this variable tells whether communication leaded a consensus and which one.
+
+agent_influential  ;this variable identifes the agent most influential
+prior_influential_start  ;this variable tells us the prior of the agent most influential
+prior_influential_end  ;this variable tells us the final belief of the agent most influential
+change_prior_influential  ;this variable tells us if the blelief of the most influential has changed
+
+agent_non_influential  ;this variable identifes one of the agents least influential which we consider
+prior_non_influential_start  ;this variable tells us the prior of the agent leat influential
+prior_non_influential_end  ;this variable tells us the final belief of the agent leat influential
+change_prior_non_influential  ;this variable tells us if the blelief of the agent leat influential has changed
+
+proportion_beleif_change_correct
+proportion_beleif_change_incorrect
+
+max_centrality
+
+]
+
+to setup ;this part initiate the model
+
+  clear-all
+
+  reset-ticks
+
+  create-outset-beliefes n-agents [set-priors]   ; these are the agent's beliefs at the outset.Construction is analogous to Hartmann's model. Yet,
+                                                 ; we need to construct them independent of the arguers, as in the preferential attachment model
+                                                 ;it would make a difference when an agent enters the network. The "ourtset-beliefse" put priors for arguers in the prior-list;
+                                                 ;later each arguer is assigned a random belief of this list as his or her prior. Hence, the belief is independent time: This is crucial
+                                                 ;for agents "social influence" = link amont depends on the time of emergence.
+
+
+
+  set prior-list sort prior-list
+
+  clear-turtles
+
+  set-network
+  set-beliefs-by-centrality
+  set-colors ; agents are assigned a color depending on their prior belief
+  set-gamma ; the radicality parameter gamma is distributed across the group of agents
+
+  set arg-list [] ;at the setup, the list of argument is empty
+
+ ; check that we do not get undesirable approximation error.
+  if (probabilistic-majority-vote)[majority-vote]
+  set wrong-prior false
+  set wrong-degrees false
+  set wrong-arg false
+  setup-plots
+
+ ;For output analysis
+  set agent_influential first [who] of arguers with-max [count link-neighbors]
+  set prior_influential_start [prior] of arguer agent_influential
+
+  set agent_non_influential one-of [who] of arguers with-min [count link-neighbors]
+  set prior_non_influential_start [prior] of arguer agent_non_influential
+
+  set correct-at-start count arguers with [prior >= 0.5]
+  set mean-at-start mean [prior] of arguers
+  set mean-at-start precision mean-at-start 5
+  set var-at-start variance  [prior] of arguers
+  set var-at-start precision var-at-start 5
+
+stop
+
+end
+
+to set-beliefs-by-centrality
+
+set influence-list reverse sort-on [count link-neighbors] arguers
+
+while [influence-list != []] [
+  let current-agent first influence-list
+
+  ask current-agent [
+    if social-influence-correlation = "none" [
+      set prior one-of prior-list
+    ]
+    if social-influence-correlation = "correct" [
+      set prior last prior-list
+    ]
+    if social-influence-correlation = "incorrect" [
+      set prior first prior-list
+    ]
+    set degree-of-belief prior
+  ]
+
+  ; Remove the used prior from prior-list
+  if social-influence-correlation = "none" [
+    set prior-list remove ([prior] of current-agent ) prior-list
+  ]
+  if social-influence-correlation = "correct" [
+    set prior-list but-last prior-list
+  ]
+  if social-influence-correlation = "incorrect" [
+    set prior-list but-first prior-list
+  ]
+
+  ; Remove current agent from influence-list
+  set influence-list remove current-agent influence-list
+]
+
+
+end
+
+to set-network ; this part of the code geneates a network connecing arguers;
+               ; Network's topolpgy is defined by the parameter "network":
+               ; In case "None" skips network construction.
+               ; In case "RN" the network has a uniform, random link distribution.
+               ; In case "PAM" the network is preferential-attachment network as modeled by Barabasi and Albert (1998).
+               ; In case "HPAM" the network is the PAM enrichted by a second phase of link formation which includes social homopholy.
+
+
+  (ifelse (network = "None") [
+
+  create-arguers n-agents ; a number of agents is created. The number of agent is set by the variable "n-agents"
+  layout-circle sort arguers 20 ;the agents are set in a circle for no particular reason
+
+  ask arguers[
+       ; the prior degrees of belief of the agents are set
+      (ifelse (social-influence-correlation = "none") [  set prior one-of prior-list] ;here we have no correlation between social influence and agents' priors
+      (social-influence-correlation = "correct") [  set prior last prior-list] ;here agets with a correct beleif have more social influence
+      (social-influence-correlation = "incorrect") [  set prior first prior-list] ;here agets with an incorrect beleif have more social influence
+
+      )
+
+    ]
+    ]
+
+
+   (network = "SW")[
+
+   create-arguers n-agents
+   layout-circle sort  arguers 10
+
+
+  let connected? false
+  while [not connected?] [
+
+
+    ask arguers [
+    let i who
+    let neighbor (i + 1) mod n-agents
+    create-link-with arguer neighbor
+  ]
+ask links [
+  ;; ensure each undirected link is only processed once
+  let id1 [who] of end1
+  let id2 [who] of end2
+  if id1 < id2 [
+    ;; choose one end as the source (end1)
+    if (random-float 1) < 0.1 [
+      let src end1
+
+      let old-target end2
+
+      ;; find a new target not equal to src and not already linked to src
+      let new-target one-of arguers with [
+        self != src and not link-neighbor? src
+      ]
+     if new-target != nobody [
+        ;; delete old link, then create the new one (keeps degree fixed)
+        ask src [
+          ask link-with old-target [ die ]    ;; <— fix here
+          create-link-with new-target
+        ]
+      ]
+    ]
+  ]
+]
+
+
+   if all? arguers [count link-neighbors > 0] [
+      set connected? true
+    ]
+      ]
+
+
+      ]
+
+  (network = "RN")[
+
+  create-arguers n-agents ; a number of agents is created. The number of agent is set by the variable "n-agents"
+  layout-circle sort arguers 20 ;the agents are set in a circle for no particular reason
+
+      
+while [count arguers with [count link-neighbors = 0] > 1] [
+  ask one-of arguers with [count link-neighbors = 0] [
+    let target one-of other arguers with [count link-neighbors = 0]
+    if target != nobody [
+      create-link-with target
+    ]
+  ]
+]
+ ; Fixes only up to 2 isolated turtles hence we need  this loop
+  if count arguers with [count link-neighbors = 0] = 1 [
+  let lone-turtle one-of arguers with [count link-neighbors = 0]
+  ask lone-turtle [
+    create-link-with one-of other arguers
+  ]
+]
+
+  while [count links < count arguers - 1] [
+  ask one-of arguers  [
+    create-link-with one-of other arguers
+  ]
+]
+
+
+
+  ]
+
+  (network = "PAM")[
+
+  create-arguers 2
+  ask arguers [
+      set prior-list remove prior prior-list
+      ask one-of arguers [create-links-with other arguers]
+
+  ]
+  while [ count arguers < n-agents ] [
+        pref-attachment
+      ]
+
+  ]
+
+
+ )
+
+end
+
+
+to pref-attachment
+  ;; new edge is green, old edges are gray
+      ask links [ set color gray ]
+      make-node-PAM find-partner ;; find partner & use it as attachment
+
+
+ layout
+
+
+end
+
+to make-node-PAM [old-node]
+ create-arguers 1
+
+  [
+    ;##########################################################
+    ; This part is analogous to the BAM ;
+    ;##########################################################
+
+    if old-node != nobody
+      [ create-link-with old-node [ set color green ]
+        ;; position the new node near its partner
+        move-to old-node
+        fd 8
+      ]
+
+   ;##########################################################
+  ; this is in case increasing link number is required, yet we set this at this place aside
+   ;##########################################################
+
+  repeat link-density [
+    while [count link-neighbors != 2] [
+    set old-node find-partner
+    if old-node != nobody and old-node != self
+      [ create-link-with old-node [ set color green ]
+        ;; position the new node near its partner
+        move-to old-node
+        fd 8
+      ]
+    ]
+  ]
+  ]
+end
+
+
+
+to layout
+  ;; the number 3 here is arbitrary; more repetitions slows down the
+  ;; model, but too few gives poor layouts
+  repeat 3 [
+    ;; the more turtles we have to fit into the same amount of space,
+    ;; the smaller the inputs to layout-spring we'll need to use
+    let factor sqrt count arguers
+    ;; numbers here are arbitrarily chosen for pleasing appearance
+    layout-spring arguers links (1 / factor) (7 / factor) (1 / factor)
+    display  ;; for smooth animation
+  ]
+  ;; don't bump the edges of the world
+  let x-offset max [xcor] of arguers + min [xcor] of arguers
+  let y-offset max [ycor] of arguers + min [ycor] of arguers
+  ;; big jumps look funny, so only adjust a little each time
+  set x-offset limit-magnitude x-offset 0.1
+  set y-offset limit-magnitude y-offset 0.1
+  ask turtles [ setxy (xcor - x-offset / 2) (ycor - y-offset / 2) ]
+end
+
+
+
+
+
+
+
+
+
+
+to set-priors ;in this part of the code, each agent is assigned a prior degree of belief drawn from a beta distribution with  alpha= alpha-pop and beta= beta-pop
+              ; the value of the variable Majority determines the type of majority in the initial group:
+              ; correct or incorrect ("any");
+              ; correct, strictly more than half the arguers have an initial prior > 0.5 ("correct");
+              ; incorrect, stricly more than half of the arguers have an initial prior <= 0.5 ("incorrect").
+
+
+set prior-list []
+
+;Case 1 initial prior distribution is random
+;Generate priors as entities
+(ifelse (Majority = "any") [while [(length prior-list < n-agents) or
+(mean prior-list <= min-group-competence) or
+(any? outset-beliefes with [belief >= 1]) or
+(any? outset-beliefes with [belief = 0]) or
+(all? outset-beliefes [belief >= 0.5]) or
+(all? outset-beliefes[belief <= 0.5])]
+
+    [set prior-list []
+
+;Generate the prior-list
+      ask outset-beliefes [
+        set belief precision (random-beta alpha-pop beta-pop) 5
+        set prior-list lput belief prior-list
+      ]
+    ]
+  ]
+
+;Case 2 initial prior distribution favours truth
+;Generate priors as entities
+(Majority = "correct") [while[(length prior-list < n-agents) or
+(mean prior-list <= min-group-competence) or
+(any? outset-beliefes with [belief >= 1]) or
+(any? outset-beliefes with [belief = 0]) or
+(all? outset-beliefes [belief >= 0.5]) or
+(all? outset-beliefes [belief <= 0.5]) or ((count outset-beliefes with [belief > 0.5]) <= (count outset-beliefes with [belief <= 0.5]))]
+
+     [set prior-list []
+
+;Generate the prior-list
+     ask outset-beliefes[
+          set belief precision (random-beta alpha-pop beta-pop) 5
+          set prior-list lput belief prior-list
+          ]
+      ]
+  ]
+
+;Case 3  initial prior distribution disfavours truth
+;Generate priors as entities
+(Majority = "incorrect")[while[(length prior-list < n-agents) or
+(mean prior-list <= min-group-competence) or
+(any? outset-beliefes with [belief >= 1]) or
+(any? outset-beliefes with [belief = 0]) or
+(all? outset-beliefes [belief >= 0.5]) or
+(all? outset-beliefes[belief <= 0.5]) or ((count outset-beliefes with [belief > 0.5]) >= (count outset-beliefes with [belief <= 0.5]))][
+
+      set prior-list []
+;Generate the prior-list
+      ask outset-beliefes[
+        set belief precision (random-beta alpha-pop beta-pop) 5
+        set prior-list lput belief prior-list
+         ]
+       ]
+  ]
+)
+
+ ;####################################################################################################################
+  ;Here we re-distribute priors and initrial beleifs such that if desired priors can be correlated to social influece.
+  ;After re-distribution of priors we ascribe the value of the myside bias gamma and set colors such that correct agents are red and incorrect agents are blue.
+ ;####################################################################################################################
+  set prior-list remove-duplicates prior-list
+  while [length prior-list < n-agents] [
+  let y precision (random-beta 1 1) 5
+  set  prior-list lput y prior-list
+  ]
+ set prior-list sort prior-list
+
+;this is for outset analysis
+;####################################################################################################################
+set correct-at-start count arguers with [prior > 0.5]
+;####################################################################################################################
+end
+
+to set-colors
+
+   ask arguers  [ ifelse(prior > 0.5)[
+      set color red ;arguers that have a strictly higher than chance prior in the correct answer are colored red,
+
+    ][
+
+      ifelse(prior < 0.5)[  ;arguers that have strictly lower than change prior in the correct answer are blue
+
+
+    set color blue][ ;arguers that have prior 0.5 are initially white
+
+    set color white]
+
+  ]]
+
+  ask arguers [ let l random-float 1
+
+    set p-color (one-of base-colors) / l ]
+
+
+end
+
+to set-gamma
+
+  ;this part of the code determines how the radicality parameter gamma is distributed among the group of agents.
+  ;gamma can be distributed in three different ways, by selecting different values for the variable distribute-gamma
+  ; First, by selecting "uniform", each agent is assigned the same value of gamma that is set in the slider gamma
+  ; Second, by selecting "across", for each agent, its parameter gamma is drawn from a beta-distribution with alpha=alpha-across and beta=beta-across (where alpha-across and beta-across can be fixed in the corresponding sliders)
+  ; Third, by selecting "within", for each agent with b>=0.5, the parameter gamma is drawn from the beta distribution with parameters alpha-correct, beta-correct (sliders);
+  ;for each agent with b<0.5, the parameter gamma is drawn from the beta distribution with parameters alpha-incorrect beta-incorrect (sliders).
+  ;In all the cases for beta distribution, we require that gamma<1, for reason that we give in the paper
+
+  if(distribute-gamma = "uniform")[
+
+   ask arguers[ set self-gamma gamma ]
+
+ ]
+
+  if(distribute-gamma = "across")[
+
+   ask arguers [
+      set self-gamma 1
+      while[precision self-gamma 5 >= 1]
+      [set self-gamma precision random-beta alpha-across beta-across 5]
+    ]
+  ]
+
+   if(distribute-gamma = "within")[
+
+    ;this instantiation is merely to make simulations easier to run
+
+    (ifelse
+      (setting = 1) [set alpha-correct  5 set beta-correct  2  set alpha-incorrect 2 set beta-incorrect 5]
+      (setting = 2) [set alpha-correct  9 set beta-correct  2 set alpha-incorrect 2 set beta-incorrect 9]
+      (setting = 3) [set alpha-correct  17 set beta-correct  2 set alpha-incorrect 2 set beta-incorrect 17]
+
+      (setting = 4) [set alpha-correct  2 set beta-correct 5 set alpha-incorrect 5 set beta-incorrect 2]
+      (setting = 5) [set alpha-correct 2 set beta-correct  9 set alpha-incorrect 9 set beta-incorrect 2]
+      (setting = 6) [set alpha-correct  2  set beta-correct  17 set alpha-incorrect 17 set beta-incorrect 2]
+
+    )
+
+    ask arguers with [prior >= 0.5] [
+
+      set self-gamma 1
+
+      while[precision self-gamma 5 >= 1][set self-gamma precision random-beta alpha-correct beta-correct 5]
+
+    ]
+
+    ask arguers with [prior < 0.5] [
+
+      set self-gamma 1
+
+      while[precision self-gamma 5 >= 1][ set self-gamma precision random-beta alpha-incorrect beta-incorrect 5]
+
+    ]
+
+  ]
+
+end
+
+to one-round-update
+
+  ;This part encodes the discussion process, where agents exchange likelihood ratios.
+
+  ;The simulation stops if all agents supporting the correct side of the issue have b > 0.9999, and simultaneously all the agents supporting the incorrect side have b<0.0001
+
+  if(not any? arguers with [degree-of-belief = 0.5] and (all? arguers with [degree-of-belief > 0.5] [degree-of-belief >= 0.99] and all? arguers with [degree-of-belief < 0.5] [degree-of-belief <= 0.01] ))[
+
+     (run [evaluate])
+    stop
+  ]
+
+
+;At the start of each argumentation round a random agent is selected; The agent then presents an argument (argue). The single argumentation round ends here. In the next argumentation round a new agent will randomly selected, present an argument and so on ...
+  ask one-of arguers [
+argue
+   ]
+
+  if (probabilistic-majority-vote) [majority-vote
+
+    ;print  precision sum (sublist (item (n-agents - 1) non-maj) ((n-agents + 1) / 2) (n-agents + 1) ) 5
+
+  ]
+
+  if(any? arguers with [prior >= 1])[set wrong-prior true]
+  if(any? arguers with [degree-of-belief >= 1])[set wrong-degrees true]
+  if(not empty? arg-list and max arg-list > 1000)[set wrong-arg true]
+
+
+tick
+
+  ;in this new version, the degree-of-belief of each agent after an argumentation round can be seen in the plot "Evolution of the Agents' Degrees of Belief"
+
+end
+
+to argue ;this part encodes how agents draw the arguments that they present.
+         ;in general, agents with degree-of-belief > 0.5 present arguments that are confirming of the correct alternative (and disconfirming of the incorrect alternative), which are numbers strictly smaller than 1
+         ;agents with degree-of-belief < 0.5 presents arguments that are disconfirming of the incorrect alternative (and disconfirming of the correct alternative), which are numbers strictly bigger than 1
+         ;this way, we model agents that produce arguments supporting their own preferred side of the issue
+
+
+    ;instantiating ourside biases
+  ifelse availability-ourside-bias
+  [set communication-partners link-neighbors] [set communication-partners other arguers ] ;In case the availability-ourside -bias
+  ifelse social-conformity-ourside-bias  [ set degree-of-social-belief [degree-of-belief] of link-neighbors][set degree-of-social-belief []] ; In case the social-conformity-ourside-bias is pesent the agent respects the beliefs of others. Otherwise, the agent only takes into account its own belief.
+  set degree-of-social-belief lput [degree-of-belief] of self degree-of-social-belief
+  set degree-of-social-belief  mean degree-of-social-belief
+
+
+  let arg 0 ;we define a variable arg, and initially give the number 0
+
+  while[precision arg 5 < 0.001 or precision arg 5 > 1 ][
+
+    set arg precision (random-beta alpha-arg beta-arg) 5] ;arg is assigned a value between 0 and 1 and strictly bigger than 0, that is drawn from a beta-distribution that is
+
+
+  ;(sum [degree-of-belief] of conformity-partners + [degree-of-belief] of self ) / (count conformity-partners + 1)  ; now the agent's argument does not depend on his or her own belief but on his social contacts beliefs as well
+
+  (ifelse( degree-of-social-belief  > 0.5)[ ; then the agent asks every other agent to update their degree of belief using arg as an argument (note indeed that arg is a confirming argument, since it is a number between 0 and 1)
+
+        ask communication-partners [
+
+          let perc-arg precision (perceived-likelihood-update arg degree-of-belief self-gamma) 5 ;each of the other arguers does the following: first, calculates the perceived-likelihood of arg, depending on its degree of belief and self-gamma,
+                                                                                                 ;using the function "perceived-likelihood-update"
+
+          (ifelse( precision (bayesian-update degree-of-belief perc-arg) 5 < 1 and precision (bayesian-update degree-of-belief perc-arg) 5 != 0)[set degree-of-belief precision (bayesian-update degree-of-belief perc-arg) 5] ;then the agent update its degree of belief in the light
+                                                                                                                                                                                                                              ;of the perceived argument that has just computed
+
+          (precision (bayesian-update degree-of-belief perc-arg) 5 >= 1)[set degree-of-belief 0.99999]  ; due to problems with approximation errors, we set that the maximum and minimum degree of belief are 0.99999 and 0.00001, respectively. This respects the fact that, since
+                                                                                                       ; we have not allowed arg to assume value 0, we should not observe any agent with degree of belief = 1
+          (precision (bayesian-update degree-of-belief perc-arg) 5 = 0 )[set degree-of-belief 0.00001])
+
+          ifelse(degree-of-belief > 0.5)[ ;each agent then changes its color depending on its new degree-of-belief
+      set color red][
+
+      ifelse(degree-of-belief < 0.5)[
+
+    set color blue][
+
+    set color white]
+
+        ]]
+
+     set arg-list lput arg arg-list ; the argument arg that the agent has produced is then added at the end of the list of the arguments of the discussion
+
+      ]
+          (degree-of-social-belief  < 0.5)[ ;if the agent's social belief < 0.5, then the agent asks its communicati ton partners to update their degree of belief using 1 / arg (the inverse of arg) as an argument (note indeed that 1 / arg is bigger than 1, since arg is smaller than 1)
+
+                             ;each arguer first, calculates the perceived-likelihood of 1 / arg, depending on its degree of belief and self-gamma,
+                            ;using the function "perceived-likelihood-update"
+                            ; then updates its degree of belief in the light of the perceived likelihood of 1 / arg
+                            ;afterwards, the agent changes color according to its degree of belief
+
+
+     ask communication-partners  [
+      let perc-arg precision (perceived-likelihood-update precision (1 / arg) 5 degree-of-belief self-gamma) 5
+          (ifelse( precision (bayesian-update degree-of-belief perc-arg) 5 < 1 and precision (bayesian-update degree-of-belief perc-arg) 5 != 0)[set degree-of-belief precision (bayesian-update degree-of-belief perc-arg) 5]
+          (precision (bayesian-update degree-of-belief perc-arg) 5 >= 1)[set degree-of-belief 0.99999]
+          (precision (bayesian-update degree-of-belief perc-arg) 5 = 0 )[set degree-of-belief 0.00001])
+
+ ifelse(degree-of-belief > 0.5)[
+      set color red][
+      ifelse(degree-of-belief < 0.5)[
+    set color blue][
+    set color white]
+    ]
+          ]
+      set arg-list lput precision (1 / arg) 5 arg-list ;the argument 1/arg is inserted at the end of the list of the arguments of the discussion
+      ]
+       )
+
+end
+
+to majority-vote ;this new command calulates the probability that a majority of the agents will cast a correct vote (for a group of odd size), under the assumption that the degree-of-belief of an agent represents the chance that one agent will vote for the correct answer
+                 ;the probabilities after each argumentation round appear in the plot "Condorcet-Majority"
+
+  let base (list precision (1 - [degree-of-belief] of arguer 0) 5  precision [degree-of-belief] of arguer 0 5 )
+
+  let i 2
+
+  set non-maj []
+
+  set non-maj fput base non-maj
+
+  let c 0
+
+  while [i != n-agents + 1][
+
+    let relevant item (i - 2) non-maj
+
+    let f []
+
+    while[c != i + 1] [
+
+
+
+      if(c = 0)[
+
+        set f lput precision ((item c relevant) * (1 - ([degree-of-belief] of arguer (i - 1))) ) 5 f]
+
+      if (c = i) [set f lput precision (last relevant * (([degree-of-belief] of arguer (i - 1))) ) 5 f]
+
+
+      if (c != 0 and c != i)[
+        set f lput precision (((item (c) relevant) * (1 - [degree-of-belief] of arguer (i - 1))) + (((item (c - 1) relevant)) * ([degree-of-belief] of arguer (i - 1)))) 5 f
+
+      ]
+
+             set c c + 1
+
+    ]
+
+;    print sum f
+
+    set non-maj lput f non-maj
+
+;    print non-maj
+
+    set c 0
+
+    set i i + 1
+
+  ]
+
+end
+
+to evaluate
+;For output analysis
+  set max_centrality [count link-neighbors] of arguer agent_influential
+  set prior_influential_end [degree-of-belief] of arguer agent_influential
+  set prior_non_influential_end [degree-of-belief] of arguer agent_non_influential
+
+  set correct-at-end count arguers with [degree-of-belief >= 0.5]
+  set mean-at-end mean [degree-of-belief] of arguers
+  set mean-at-end precision mean-at-end 5
+  set var-at-end variance  [degree-of-belief] of arguers
+  set var-at-end precision var-at-end 5
+
+
+
+
+
+  set change_prior_influential []
+  (ifelse
+    prior_influential_start >= 0.5 and prior_influential_end >= 0.5 [set change_prior_influential lput "NC" change_prior_influential] ; here agent with most social influence did not change position
+    prior_influential_start < 0.5 and prior_influential_end < 0.5 [set change_prior_influential lput "NC" change_prior_influential] ; here agent with most social influence did not change position
+    prior_influential_start >= 0.5 and prior_influential_end < 0.5 [set change_prior_influential lput "CF" change_prior_influential] ; here agent with most social influence canged from correrrect to an incorrect position
+    prior_influential_start < 0.5 and prior_influential_end >= 0.5 [set change_prior_influential lput "FC" change_prior_influential]  ; here agent with most social influence canged from incorrerrect to a correct position
+
+  )
+
+
+  set change_prior_non_influential []
+  (ifelse
+    prior_non_influential_start >= 0.5 and prior_non_influential_end >= 0.5 [set change_prior_non_influential lput "NC" change_prior_non_influential] ; here agent with most social influence did not change position
+    prior_non_influential_start < 0.5 and prior_non_influential_end < 0.5 [set change_prior_non_influential lput "NC" change_prior_non_influential] ; here agent with most social influence did not change position
+    prior_non_influential_start >= 0.5 and prior_non_influential_end < 0.5 [set change_prior_non_influential lput "CF" change_prior_non_influential] ; here agent with most social influence canged from correrrect to an incorrect position
+    prior_non_influential_start < 0.5 and prior_non_influential_end >= 0.5 [set change_prior_non_influential lput "FC" change_prior_non_influential]  ; here agent with most social influence canged from incorrerrect to a correct position
+
+  )
+
+
+  set consensus-at-end []
+(ifelse
+ all? arguers [degree-of-belief > 0.5] [set consensus-at-end lput "CC" consensus-at-end ] ; Here we have a correct consensus
+ all? arguers [degree-of-belief < 0.5] [set consensus-at-end lput "FC" consensus-at-end ]; Here we have an incorrect consensus
+[set consensus-at-end lput "GP" consensus-at-end ]) ;here we have Group-Polarisation
+
+
+ set proportion_beleif_change_correct count arguers with [prior <= 0.5  and degree-of-belief > 0.5]
+set proportion_beleif_change_incorrect count arguers with [prior > 0.5  and degree-of-belief <= 0.5]
+
+
+
+
+end
+
+to-report random-beta [ #alpha #beta ] ;beta-distribution
+  let XX random-gamma #alpha 1
+  let YY random-gamma #beta 1
+   report XX / (XX + YY)
+end
+
+to-report perceived-likelihood-update [a b c] ;this is the function that determines the perceived likelihood ratio
+ifelse (b >= 0.5)[
+    report (2 * a) * ((1 - b) ^ (c) /(b ^ (c) + (1 - b) ^ (c)))]
+  [report (a / 2) * ((b ^ (c) + (1 - b) ^ (c)) / (b ^ c)) ]
+
+end
+
+to-report bayesian-update [a b] ;Bayesian update
+
+
+   report ((a) / (a +  ((b) * (1 - a))))
+
+end
+
+to-report find-partner
+  report [one-of both-ends] of one-of links
+end
+
+to-report limit-magnitude [number limit]
+  if number > limit [ report limit ]
+  if number < (- limit) [ report (- limit) ]
+  report number
+end]]></code>
+  <widgets>
+    <view x="35" wrappingAllowedX="false" y="10" frameRate="60.0" minPycor="-30" height="485" showTickCounter="true" patchSize="7.8033" fontSize="10" wrappingAllowedY="false" width="484" tickCounterLabel="ticks" maxPycor="30" updateMode="0" maxPxcor="30" minPxcor="-30"></view>
+    <slider x="748" step="1" y="11" max="501" display="n-agents" height="33" min="2" direction="Horizontal" default="62.0" variable="n-agents" width="172" sizeVersion="0"></slider>
+    <button x="606" y="142" height="33" disableUntilTicks="false" forever="false" kind="Observer" width="63" sizeVersion="0">setup</button>
+    <slider x="1673" step="0.01" y="10" max="1" display="gamma" height="33" min="0" direction="Horizontal" default="0.0" variable="gamma" width="172" sizeVersion="0"></slider>
+    <button x="606" y="219" height="33" disableUntilTicks="false" forever="true" kind="Observer" display="start" width="133" sizeVersion="0">one-round-update</button>
+    <monitor x="1024" precision="17" y="11" height="45" fontSize="11" display="initial-average competence" width="162" sizeVersion="0">precision mean prior-list 2</monitor>
+    <monitor x="1190" precision="17" y="11" height="45" fontSize="11" display="maj" width="57" sizeVersion="0"><![CDATA[max list count arguers with [prior > 0.5] count arguers with [prior < 0.5] = count arguers with [prior > 0.5]]]></monitor>
+    <chooser x="1497" y="10" height="45" variable="distribute-gamma" current="0" display="distribute-gamma" width="138" sizeVersion="0">
+      <choice type="string" value="uniform"></choice>
+      <choice type="string" value="across"></choice>
+      <choice type="string" value="within"></choice>
+    </chooser>
+    <slider x="1492" step="1" y="68" max="20" display="alpha-across" height="33" min="1" direction="Horizontal" default="4.0" variable="alpha-across" width="172" sizeVersion="0"></slider>
+    <slider x="1492" step="1" y="107" max="20" display="beta-across" height="33" min="1" direction="Horizontal" default="20.0" variable="beta-across" width="172" sizeVersion="0"></slider>
+    <slider x="750" step="1" y="172" max="20" display="beta-pop" height="33" min="1" direction="Horizontal" default="1.0" variable="beta-pop" width="172" sizeVersion="0"></slider>
+    <plot x="964" autoPlotX="true" yMax="1.0" autoPlotY="true" y="234" xMin="0.0" height="164" legend="false" xMax="1.0" yMin="0.0" display="Distribution of Degrees of Belief" width="406" sizeVersion="0">
+      <setup>set-plot-pen-mode 1
+set-histogram-num-bars 100
+histogram [degree-of-belief] of arguers</setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="default" color="-16777216" legend="true">
+        <setup></setup>
+        <update>histogram [degree-of-belief] of arguers </update>
+      </pen>
+    </plot>
+    <button x="607" y="181" height="33" disableUntilTicks="false" forever="false" kind="Observer" width="133" sizeVersion="0">one-round-update</button>
+    <slider x="1039" step="1" y="137" max="20" display="alpha-arg" height="33" min="1" direction="Horizontal" default="1.0" variable="alpha-arg" width="172" sizeVersion="0"></slider>
+    <slider x="1039" step="1" y="101" max="20" display="beta-arg" height="33" min="1" direction="Horizontal" default="1.0" variable="beta-arg" width="172" sizeVersion="0"></slider>
+    <switch x="748" y="51" height="33" on="true" variable="probabilistic-majority-vote" display="probabilistic-majority-vote" width="200" sizeVersion="0"></switch>
+    <plot x="964" autoPlotX="true" yMax="10.0" autoPlotY="true" y="403" xMin="0.0" height="120" legend="false" xMax="5.0" yMin="0.0" display="degree-distribution" width="406" sizeVersion="0">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="default" color="-16777216" legend="true">
+        <setup></setup>
+        <update>let max-degree max [count link-neighbors] of turtles
+plot-pen-reset  ;; erase what we plotted before
+set-plot-x-range 1 (max-degree + 1)  ;; + 1 to make room for the width of the last bar
+histogram [count link-neighbors] of turtles</update>
+      </pen>
+    </plot>
+    <chooser x="751" y="210" height="45" variable="Majority" current="0" display="Majority" width="138" sizeVersion="0">
+      <choice type="string" value="any"></choice>
+      <choice type="string" value="correct"></choice>
+      <choice type="string" value="incorrect"></choice>
+    </chooser>
+    <slider x="748" step="0.01" y="93" max="1" display="min-group-competence" height="33" min="0" direction="Horizontal" default="0.5" variable="min-group-competence" width="204" sizeVersion="0"></slider>
+    <chooser x="604" y="262" height="45" variable="network" current="1" display="network" width="138" sizeVersion="0">
+      <choice type="string" value="None"></choice>
+      <choice type="string" value="SW"></choice>
+      <choice type="string" value="RN"></choice>
+      <choice type="string" value="PAM"></choice>
+    </chooser>
+    <input x="601" multiline="false" y="448" height="60" variable="link-density" type="number" width="149" sizeVersion="0">0.0</input>
+    <switch x="603" y="311" height="33" on="true" variable="availability-ourside-bias" display="availability-ourside-bias" width="208" sizeVersion="0"></switch>
+    <switch x="601" y="354" height="33" on="true" variable="social-conformity-ourside-bias" display="social-conformity-ourside-bias" width="254" sizeVersion="0"></switch>
+    <chooser x="600" y="396" height="45" variable="social-influence-correlation" current="0" display="social-influence-correlation" width="198" sizeVersion="0">
+      <choice type="string" value="none"></choice>
+      <choice type="string" value="correct"></choice>
+      <choice type="string" value="incorrect"></choice>
+    </chooser>
+    <button x="756" y="284" height="33" disableUntilTicks="false" forever="false" kind="Observer" width="82" sizeVersion="0">evaluate</button>
+    <slider x="749" step="1" y="133" max="20" display="alpha-pop" height="33" min="1" direction="Horizontal" default="1.0" variable="alpha-pop" width="172" sizeVersion="0"></slider>
+    <chooser x="1563" y="241" height="45" variable="Setting" current="5" display="Setting" width="138" sizeVersion="0">
+      <choice type="double" value="1.0"></choice>
+      <choice type="double" value="2.0"></choice>
+      <choice type="double" value="3.0"></choice>
+      <choice type="double" value="4.0"></choice>
+      <choice type="double" value="5.0"></choice>
+      <choice type="double" value="6.0"></choice>
+    </chooser>
+  </widgets>
+  <info>## WHAT IS IT?
+
+(a general understanding of what the model is trying to show or explain)
+
+## HOW IT WORKS
+
+(what rules the agents use to create the overall behavior of the model)
+
+## HOW TO USE IT
+
+(how to use the model, including a description of each of the items in the Interface tab)
+
+## THINGS TO NOTICE
+
+(suggested things for the user to notice while running the model)
+
+## THINGS TO TRY
+
+(suggested things for the user to try to do (move sliders, switches, etc.) with the model)
+
+## EXTENDING THE MODEL
+
+(suggested things to add or change in the Code tab to make the model more complicated, detailed, accurate, etc.)
+
+## NETLOGO FEATURES
+
+(interesting or unusual features of NetLogo that the model uses, particularly in the Code tab; or where workarounds were needed for missing features)
+
+## RELATED MODELS
+
+(models in the NetLogo Models Library and elsewhere which are of related interest)
+
+## CREDITS AND REFERENCES
+
+(a reference to the model's URL on the web if it has one, as well as any other necessary credits, citations, and links)</info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="sheep" rotatable="false" editableColorIndex="15">
+      <circle x="203" y="65" marked="true" color="-1" diameter="88" filled="true"></circle>
+      <circle x="70" y="65" marked="true" color="-1" diameter="162" filled="true"></circle>
+      <circle x="150" y="105" marked="true" color="-1" diameter="120" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="218" y="120"></point>
+        <point x="240" y="165"></point>
+        <point x="255" y="165"></point>
+        <point x="278" y="120"></point>
+      </polygon>
+      <circle x="214" y="72" marked="false" color="-1920102913" diameter="67" filled="true"></circle>
+      <rectangle endX="179" startY="223" marked="true" color="-1" endY="298" startX="164" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="45" y="285"></point>
+        <point x="30" y="285"></point>
+        <point x="30" y="240"></point>
+        <point x="15" y="195"></point>
+        <point x="45" y="210"></point>
+      </polygon>
+      <circle x="3" y="83" marked="true" color="-1" diameter="150" filled="true"></circle>
+      <rectangle endX="80" startY="221" marked="true" color="-1" endY="296" startX="65" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="195" y="285"></point>
+        <point x="210" y="285"></point>
+        <point x="210" y="240"></point>
+        <point x="240" y="210"></point>
+        <point x="195" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="276" y="85"></point>
+        <point x="285" y="105"></point>
+        <point x="302" y="99"></point>
+        <point x="294" y="83"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="219" y="85"></point>
+        <point x="210" y="105"></point>
+        <point x="193" y="99"></point>
+        <point x="201" y="83"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="wolf" rotatable="false" editableColorIndex="0">
+      <polygon color="255" filled="true" marked="false">
+        <point x="253" y="133"></point>
+        <point x="245" y="131"></point>
+        <point x="245" y="133"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="2" y="194"></point>
+        <point x="13" y="197"></point>
+        <point x="30" y="191"></point>
+        <point x="38" y="193"></point>
+        <point x="38" y="205"></point>
+        <point x="20" y="226"></point>
+        <point x="20" y="257"></point>
+        <point x="27" y="265"></point>
+        <point x="38" y="266"></point>
+        <point x="40" y="260"></point>
+        <point x="31" y="253"></point>
+        <point x="31" y="230"></point>
+        <point x="60" y="206"></point>
+        <point x="68" y="198"></point>
+        <point x="75" y="209"></point>
+        <point x="66" y="228"></point>
+        <point x="65" y="243"></point>
+        <point x="82" y="261"></point>
+        <point x="84" y="268"></point>
+        <point x="100" y="267"></point>
+        <point x="103" y="261"></point>
+        <point x="77" y="239"></point>
+        <point x="79" y="231"></point>
+        <point x="100" y="207"></point>
+        <point x="98" y="196"></point>
+        <point x="119" y="201"></point>
+        <point x="143" y="202"></point>
+        <point x="160" y="195"></point>
+        <point x="166" y="210"></point>
+        <point x="172" y="213"></point>
+        <point x="173" y="238"></point>
+        <point x="167" y="251"></point>
+        <point x="160" y="248"></point>
+        <point x="154" y="265"></point>
+        <point x="169" y="264"></point>
+        <point x="178" y="247"></point>
+        <point x="186" y="240"></point>
+        <point x="198" y="260"></point>
+        <point x="200" y="271"></point>
+        <point x="217" y="271"></point>
+        <point x="219" y="262"></point>
+        <point x="207" y="258"></point>
+        <point x="195" y="230"></point>
+        <point x="192" y="198"></point>
+        <point x="210" y="184"></point>
+        <point x="227" y="164"></point>
+        <point x="242" y="144"></point>
+        <point x="259" y="145"></point>
+        <point x="284" y="151"></point>
+        <point x="277" y="141"></point>
+        <point x="293" y="140"></point>
+        <point x="299" y="134"></point>
+        <point x="297" y="127"></point>
+        <point x="273" y="119"></point>
+        <point x="270" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="-1" y="195"></point>
+        <point x="14" y="180"></point>
+        <point x="36" y="166"></point>
+        <point x="40" y="153"></point>
+        <point x="53" y="140"></point>
+        <point x="82" y="131"></point>
+        <point x="134" y="133"></point>
+        <point x="159" y="126"></point>
+        <point x="188" y="115"></point>
+        <point x="227" y="108"></point>
+        <point x="236" y="102"></point>
+        <point x="238" y="98"></point>
+        <point x="268" y="86"></point>
+        <point x="269" y="92"></point>
+        <point x="281" y="87"></point>
+        <point x="269" y="103"></point>
+        <point x="269" y="113"></point>
+      </polygon>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+  <experiments>
+    <experiment name="experiment" repetitions="1000" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>one-round-update</go>
+      <constants>
+        <enumeratedValueSet variable="gamma">
+          <value value="0"></value>
+          <value value="0.1"></value>
+          <value value="0.2"></value>
+          <value value="0.3"></value>
+          <value value="0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="10"></value>
+          <value value="20"></value>
+          <value value="50"></value>
+          <value value="100"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.5"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="gamma_within_172217" repetitions="10000" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>one-round-update</go>
+      <metrics>
+        <metric>ticks</metric>
+        <metric>precision mean prior-list 2</metric>
+        <metric><![CDATA[max list count arguers with [prior > 0.5] count arguers with [prior < 0.5] = count arguers with [prior > 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief > 0.5] or all? arguers [degree-of-belief < 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief > 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief < 0.5]]]></metric>
+        <metric>correct-at-start</metric>
+        <metric><![CDATA[count arguers with [prior > 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [prior < 0.5]]]></metric>
+        <metric>count arguers with [prior = 0.5]</metric>
+        <metric><![CDATA[count arguers with [degree-of-belief > 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief < 0.5]]]></metric>
+        <metric>count arguers with [degree-of-belief = 0.5]</metric>
+        <metric><![CDATA[count arguers with [degree-of-belief > 0.5 and prior > 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief < 0.5 and prior < 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief > 0.5 and prior = 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief < 0.5 and prior = 0.5]]]></metric>
+        <metric>final-round</metric>
+        <metric>arg-list</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="alpha-correct">
+          <value value="17"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-correct">
+          <value value="2"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-incorrect">
+          <value value="2"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-incorrect">
+          <value value="17"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="10"></value>
+          <value value="20"></value>
+          <value value="30"></value>
+          <value value="50"></value>
+          <value value="100"></value>
+          <value value="500"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="protocols">
+          <value value="&quot;random&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="distribute-gamma">
+          <value value="&quot;within&quot;"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="try out" repetitions="10" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>one-round-update</go>
+      <metrics>
+        <metric>ticks</metric>
+        <metric>arg-list</metric>
+        <metric><![CDATA[all? arguers [degree-of-belief > 0.5]]]></metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="gamma">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="100"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.51"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="protocols">
+          <value value="&quot;alternate&quot;"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="experiment (1)" repetitions="10" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>one-round-update</go>
+      <constants>
+        <enumeratedValueSet variable="gamma">
+          <value value="0.8"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="500"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.51"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="protocols">
+          <value value="&quot;random&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="distribute-gamma">
+          <value value="&quot;uniform&quot;"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="experiment (2)" repetitions="1000" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>one-round-update</go>
+      <metrics>
+        <metric>ticks</metric>
+        <metric>precision mean prior-list 2</metric>
+        <metric><![CDATA[max list count arguers with [prior > 0.5] count arguers with [prior < 0.5] = count arguers with [prior > 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief > 0.5] or all? arguers [degree-of-belief < 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief > 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief < 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief > 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief < 0.5]]]></metric>
+        <metric>final-round</metric>
+        <metric>arg-list</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="gamma">
+          <value value="0.8"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="500"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.51"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="protocols">
+          <value value="&quot;alternate&quot;"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="experiment (3)" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="beta-across">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="gamma">
+          <value value="0.2"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-across">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-correct">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-correct">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-incorrect">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-incorrect">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="distribute-gamma">
+          <value value="&quot;within&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="protocols">
+          <value value="&quot;random&quot;"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="experiment (4)" repetitions="20000" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="gamma">
+          <value value="0"></value>
+          <value value="0.1"></value>
+          <value value="0.2"></value>
+          <value value="0.3"></value>
+          <value value="0.5"></value>
+          <value value="0.7"></value>
+          <value value="0.8"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-across">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-correct">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-correct">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="10"></value>
+          <value value="20"></value>
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-incorrect">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-incorrect">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="protocols">
+          <value value="&quot;random&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="distribute-gamma">
+          <value value="&quot;across&quot;"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="to_501_2552_within_incorrect" repetitions="30000" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>one-round-update</go>
+      <metrics>
+        <metric>ticks</metric>
+        <metric>precision mean prior-list 2</metric>
+        <metric><![CDATA[max list count arguers with [prior > 0.5] count arguers with [prior < 0.5] = count arguers with [prior > 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief > 0.5] or all? arguers [degree-of-belief < 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief > 0.5]]]></metric>
+        <metric><![CDATA[all? arguers [degree-of-belief < 0.5]]]></metric>
+        <metric>correct-at-start</metric>
+        <metric><![CDATA[count arguers with [prior > 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [prior < 0.5]]]></metric>
+        <metric>count arguers with [prior = 0.5]</metric>
+        <metric><![CDATA[count arguers with [degree-of-belief > 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief < 0.5]]]></metric>
+        <metric>count arguers with [degree-of-belief = 0.5]</metric>
+        <metric><![CDATA[count arguers with [degree-of-belief > 0.5 and prior > 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief < 0.5 and prior < 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief > 0.5 and prior = 0.5]]]></metric>
+        <metric><![CDATA[count arguers with [degree-of-belief < 0.5 and prior = 0.5]]]></metric>
+        <metric>arg-list</metric>
+        <metric>wrong-prior</metric>
+        <metric>wrong-degrees</metric>
+        <metric>wrong-arg</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="11"></value>
+          <value value="21"></value>
+          <value value="31"></value>
+          <value value="51"></value>
+          <value value="101"></value>
+          <value value="301"></value>
+          <value value="501"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="Majority">
+          <value value="&quot;incorrect&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="distribute-gamma">
+          <value value="&quot;within&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-pop">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-pop">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-arg">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-arg">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-correct">
+          <value value="2"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-correct">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-incorrect">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-incorrect">
+          <value value="2"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="RN_AVB_no_influence_150_vers_4" repetitions="500" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>one-round-update</go>
+      <metrics>
+        <metric>ticks</metric>
+        <metric>correct-at-start</metric>
+        <metric>correct-at-end</metric>
+        <metric>var-at-start</metric>
+        <metric>var-at-end</metric>
+        <metric>mean-at-start</metric>
+        <metric>mean-at-end</metric>
+        <metric>consensus-at-end</metric>
+        <metric>prior_influential_start</metric>
+        <metric>prior_influential_end</metric>
+        <metric>change_prior_influential</metric>
+        <metric>change_prior_non_influential</metric>
+        <metric>proportion_beleif_change_correct</metric>
+        <metric>proportion_beleif_change_incorrect</metric>
+        <metric>max_centrality</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="network">
+          <value value="&quot;SW&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="distribute-gamma">
+          <value value="&quot;uniform&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="gamma">
+          <value value="0"></value>
+          <value value="0.1"></value>
+          <value value="0.2"></value>
+          <value value="0.3"></value>
+          <value value="0.5"></value>
+          <value value="0.8"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="social-conformity-ourside-bias">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="availability-ourside-bias">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="social-influence-correlation">
+          <value value="&quot;correct&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="n-agents">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="probabilistic-majority-vote">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="link-density">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="min-group-competence">
+          <value value="0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="Majority">
+          <value value="&quot;any&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-pop">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-pop">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="alpha-arg">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="beta-arg">
+          <value value="1"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+  </experiments>
+</model>
